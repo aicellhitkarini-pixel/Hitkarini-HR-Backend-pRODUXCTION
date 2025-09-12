@@ -1,0 +1,86 @@
+{
+  "info": {
+    "name": "Application API",
+    "_postman_id": "d6b12cde-abc1-48e2-9f85-7d5f63ab1234",
+    "description": "Test createApplication API with all fields, arrays, objects, and file uploads",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "item": [
+    {
+      "name": "Create Application",
+      "request": {
+        "method": "POST",
+        "header": [],
+        "body": {
+          "mode": "formdata",
+          "formdata": [
+            { "key": "fullName", "value": "Vishvesh Rathore", "type": "text" },
+            { "key": "fatherName", "value": "Rajesh Rathore", "type": "text" },
+            { "key": "fatherOccupation", "value": "Businessman", "type": "text" },
+            { "key": "motherName", "value": "Sunita Rathore", "type": "text" },
+            { "key": "motherOccupation", "value": "Teacher", "type": "text" },
+            { "key": "dateOfBirth", "value": "1999-06-15", "type": "text" },
+            { "key": "gender", "value": "Male", "type": "text" },
+            { "key": "bloodGroup", "value": "B+", "type": "text" },
+            { "key": "category", "value": "General", "type": "text" },
+            { "key": "religion", "value": "Hindu", "type": "text" },
+            { "key": "nationality", "value": "Indian", "type": "text" },
+            { "key": "languagesKnown", "value": "[\"English\",\"Hindi\"]", "type": "text" },
+            { "key": "physicalDisability", "value": "false", "type": "text" },
+            { "key": "maritalStatus", "value": "Married", "type": "text" },
+            { "key": "spouseName", "value": "Priya Rathore", "type": "text" },
+            { "key": "children", "value": "1", "type": "text" },
+            { "key": "address", "value": "Jabalpur, MP", "type": "text" },
+            { "key": "addressPincode", "value": "482001", "type": "text" },
+            { "key": "permanentAddress", "value": "Jabalpur, MP", "type": "text" },
+            { "key": "permanentAddressPincode", "value": "482002", "type": "text" },
+            { "key": "mobileNumber", "value": "9713987284", "type": "text" },
+            { "key": "emergencyMobileNumber", "value": "9999999999", "type": "text" },
+            { "key": "email", "value": "vishveshrathore20@gmail.com", "type": "text" },
+            { "key": "areaOfInterest", "value": "Full Stack Development", "type": "text" },
+            { "key": "applyingFor", "value": "Teaching", "type": "text" },
+            { "key": "subjectOrDepartment", "value": "Computer Science", "type": "text" },
+            { "key": "totalWorkExperience", "value": "2", "type": "text" },
+
+            { "key": "photo", "src": "/path/to/photo.jpg", "type": "file" },
+            { "key": "resume", "src": "/path/to/resume.pdf", "type": "file" },
+
+            {
+              "key": "educationQualifications",
+              "value": "[{\"level\":\"Graduation\",\"examType\":\"Regular\",\"medium\":\"English\",\"subject\":\"Computer Science\",\"boardOrUniversity\":\"RGPV\",\"institutionName\":\"SRIT Jabalpur\",\"yearOfPassing\":\"2024\",\"percentageOrCGPA\":\"8.38\"},{\"level\":\"12th\",\"examType\":\"Regular\",\"medium\":\"English\",\"subject\":\"PCM\",\"boardOrUniversity\":\"CBSE\",\"institutionName\":\"XYZ School\",\"yearOfPassing\":\"2020\",\"percentageOrCGPA\":\"85%\"}]",
+              "type": "text"
+            },
+            {
+              "key": "workExperience",
+              "value": "[{\"serialNo\":1,\"institutionName\":\"IITGJobs.com\",\"designation\":\"Software Developer\",\"startDate\":\"2024-09-01\",\"endDate\":\"2025-02-28\",\"netMonthlySalary\":\"40000\",\"reasonOfLeaving\":\"Better Opportunity\"},{\"serialNo\":2,\"institutionName\":\"TVM Consulting\",\"designation\":\"Trainee Engineer\",\"startDate\":\"2024-07-01\",\"endDate\":\"2024-10-31\",\"netMonthlySalary\":\"15000\",\"reasonOfLeaving\":\"Contract Ended\"}]",
+              "type": "text"
+            },
+            {
+              "key": "references",
+              "value": "[{\"name\":\"Rahul Sharma\",\"designation\":\"Manager\",\"contact\":\"rahul.sharma@example.com\"},{\"name\":\"Anita Verma\",\"designation\":\"Professor\",\"contact\":\"9998877665\"}]",
+              "type": "text"
+            },
+            {
+              "key": "applicationHistory",
+              "value": "[{\"jobTitle\":\"Intern\",\"organization\":\"Mastek Enterprise Solutions\",\"appliedDate\":\"2024-01-10\",\"status\":\"Completed\"}]",
+              "type": "text"
+            },
+            {
+              "key": "socialMedia",
+              "value": "{\"linkedin\":\"https://linkedin.com/in/vishveshrathore20\",\"facebook\":\"https://facebook.com/vishveshrathore\",\"instagram\":\"https://instagram.com/vishveshrathore\"}",
+              "type": "text"
+            }
+          ]
+        },
+        "url": {
+          "raw": "http://localhost:8000/api/addApplication",
+          "protocol": "http",
+          "host": ["localhost"],
+          "port": "8000",
+          "path": ["api", "addApplication"]
+        }
+      },
+      "response": []
+    }
+  ]
+}
