@@ -21,20 +21,76 @@ exports.createApplication = async (req, res) => {
       ? await uploadToCloudinary(resumeFile.path, "resumes")
       : null;
 
-    // Parse JSON fields safely
-    const parseJSON = (field) => {
+    // Safe JSON parser
+    const parseJSON = (field, fallback = []) => {
       try {
-        return JSON.parse(field || "[]");
-      } catch (e) {
-        return [];
+        return JSON.parse(field || JSON.stringify(fallback));
+      } catch {
+        return fallback;
       }
     };
 
+    // Construct application data
     const applicationData = {
-      ...req.body,
-      educationQualifications: parseJSON(req.body.educationQualifications),
-      workExperience: parseJSON(req.body.workExperience),
-      references: parseJSON(req.body.references),
+      // Cloudinary links
+      photoLink,
+      resumeLink,
+
+      // Job Info
+      applyingFor: req.body.applyingFor,
+      subjectOrDepartment: req.body.subjectOrDepartment,
+
+      // Personal Info
+      fullName: req.body.fullName,
+      fatherName: req.body.fatherName,
+      fatherOccupation: req.body.fatherOccupation,
+      motherName: req.body.motherName,
+      motherOccupation: req.body.motherOccupation,
+      dateOfBirth: req.body.dateOfBirth,
+      gender: req.body.gender,
+      bloodGroup: req.body.bloodGroup,
+      category: req.body.category,
+      religion: req.body.religion,
+      nationality: req.body.nationality,
+      languagesKnown: parseJSON(req.body.languagesKnown, []),
+
+      physicalDisability: req.body.physicalDisability === "true",
+      maritalStatus: req.body.maritalStatus,
+      spouseName: req.body.spouseName,
+      children: req.body.children || 0,
+
+      // Address
+      address: req.body.address,
+      addressPincode: req.body.addressPincode,
+      permanentAddress: req.body.permanentAddress,
+      permanentAddressPincode: req.body.permanentAddressPincode,
+
+      // Contact Info
+      mobileNumber: req.body.mobileNumber,
+      emergencyMobileNumber: req.body.emergencyMobileNumber,
+      email: req.body.email,
+
+      // Interests
+      areaOfInterest: req.body.areaOfInterest,
+
+      // Education
+      educationQualifications: parseJSON(
+        req.body.educationQualifications,
+        []
+      ),
+      educationCategory: (() => {
+        try {
+          return JSON.parse(req.body.educationCategory || "{}");
+        } catch {
+          return {};
+        }
+      })(),
+
+      // Work Experience
+      totalWorkExperience: req.body.totalWorkExperience || 0,
+      workExperience: parseJSON(req.body.workExperience, []),
+
+      // Social Media
       socialMedia: (() => {
         try {
           return JSON.parse(req.body.socialMedia || "{}");
@@ -42,10 +98,15 @@ exports.createApplication = async (req, res) => {
           return {};
         }
       })(),
-      photoLink,
-      resumeLink,
+
+      // References
+      references: parseJSON(req.body.references, []),
+
+      // Salary Expectation
+      expectedSalary: req.body.expectedSalary,
     };
 
+    // Save to DB
     const savedApp = await Recruitment.create(applicationData);
 
     // ------------------ 📧 HR Email ------------------
@@ -65,7 +126,7 @@ exports.createApplication = async (req, res) => {
       message: hrMessage,
     });
 
-    // ------------------ 📧 Candidate Confirmation Email ------------------
+    // ------------------ 📧 Candidate Email ------------------
     const candidateMessage = `
       <h2>Dear ${savedApp.fullName},</h2>
       <p>Thank you for applying for the position of <b>${savedApp.applyingFor || "N/A"}</b> at Hitkarini Sabha.</p>
@@ -76,10 +137,10 @@ exports.createApplication = async (req, res) => {
     `;
 
     await sendHrEmail({
-  to: savedApp.email, // candidate’s email
-  subject: "✅ Your Application Has Been Received",
-  message: candidateMessage,
-});
+      to: savedApp.email,
+      subject: "✅ Your Application Has Been Received",
+      message: candidateMessage,
+    });
 
     console.log("✅ Emails sent: HR + Candidate");
 

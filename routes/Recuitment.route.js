@@ -17,7 +17,7 @@ router.post(
 
 router.get("/getApplications", getApplications);
 router.get("/get/count", getApplicationCounts)
-router.post("/send-email",sendEmail);
+router.post("/sendemail",sendEmail);
 router.get("/application/:id", generateApplicationPDF);
 
 
