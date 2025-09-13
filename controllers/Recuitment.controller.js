@@ -121,7 +121,7 @@ exports.createApplication = async (req, res) => {
     `;
 
     await sendHrEmail({
-      to: "vishvesh.r@iitgjobs.com",
+      to: "hitkarinisabhahr@gmail.com",
       subject: `📩 New Application - ${savedApp.fullName}`,
       message: hrMessage,
     });
