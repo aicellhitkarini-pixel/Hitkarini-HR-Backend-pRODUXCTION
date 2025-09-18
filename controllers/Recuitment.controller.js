@@ -131,7 +131,37 @@ exports.createApplication = async (req, res) => {
   const children = req.body.children ? parseInt(req.body.children, 10) || 0 : 0;
   const totalWorkExperience = req.body.totalWorkExperience ? parseFloat(req.body.totalWorkExperience) || 0 : 0;
 
-    // Construct application data
+    // Prepare normalized workExperience (dates, numbers)
+    const normalizedWorkExperience = Array.isArray(workExperience)
+      ? workExperience.map((w) => ({
+          ...w,
+          startDate: w?.startDate ? new Date(w.startDate) : undefined,
+          endDate: w?.endDate ? new Date(w.endDate) : undefined,
+          netMonthlySalary: w?.netMonthlySalary ? Number(w.netMonthlySalary) : w?.netMonthlySalary,
+        }))
+      : [];
+
+    // Normalize expected salary once
+    const rawExpected = req.body.expectedSalary;
+    const normalizedExpectedSalary = (() => {
+      if (!rawExpected) return undefined;
+      const mapped = fuzzyFind(rawExpected, allowedExpected);
+      if (mapped) return mapped;
+      const numeric = String(rawExpected).match(/\d+/g)?.map(Number) || [];
+      if (numeric.length) {
+        const avg = numeric.reduce((a, b) => a + b, 0) / numeric.length;
+        if (avg <= 300000) return "Up to 3 LPA";
+        if (avg <= 700000) return "4 - 7 LPA";
+        if (avg <= 1100000) return "8 - 11 LPA";
+        if (avg <= 1500000) return "12 - 15 LPA";
+        if (avg <= 2000000) return "16 - 20 LPA";
+        if (avg <= 2500000) return "21 - 25 LPA";
+        return "25 LPA Above";
+      }
+      return rawExpected;
+    })();
+
+    // Construct application data (cleaned, no duplicate keys)
     const applicationData = {
       photoLink,
       resumeLink,
@@ -168,67 +198,47 @@ exports.createApplication = async (req, res) => {
 
       areaOfInterest: req.body.areaOfInterest,
 
-  educationQualifications,
-  // ensure educationCategory is an object and normalized
-  educationCategory: educationCategory || {},
+      educationQualifications,
+      educationCategory: educationCategory || {},
 
       totalWorkExperience,
-      // cast workExperience dates to Date objects when possible
-      workExperience: Array.isArray(workExperience)
-        ? workExperience.map((w) => ({
-            ...w,
-            startDate: w?.startDate ? new Date(w.startDate) : undefined,
-            endDate: w?.endDate ? new Date(w.endDate) : undefined,
-            netMonthlySalary: w?.netMonthlySalary ? Number(w.netMonthlySalary) : w?.netMonthlySalary,
-          }))
-        : workExperience,
+      workExperience: normalizedWorkExperience,
 
       socialMedia,
-
       references,
 
-      // normalize expected salary to allowed enum when possible
-      expectedSalary: (() => {
-        const raw = req.body.expectedSalary;
-        if (!raw) return undefined;
-        const mapped = fuzzyFind(raw, allowedExpected);
-        if (mapped) return mapped;
-        // mapping common school ranges to nearest LPA buckets
-        const numeric = String(raw).match(/\d+/g)?.map(Number) || [];
-        if (numeric.length) {
-          const avg = numeric.reduce((a,b) => a+b,0)/numeric.length;
-          if (avg <= 300000) return 'Up to 3 LPA';
-          if (avg <= 700000) return '4 - 7 LPA';
-          if (avg <= 1100000) return '8 - 11 LPA';
-          if (avg <= 1500000) return '12 - 15 LPA';
-          if (avg <= 2000000) return '16 - 20 LPA';
-          if (avg <= 2500000) return '21 - 25 LPA';
-          return '25 LPA Above';
-        }
-        // fallback: if not mappable, return as-is and let mongoose validate
-        return raw;
-      })(),
-      
-      workExperience,
-
-      socialMedia,
-
-      references,
-
-      expectedSalary: req.body.expectedSalary,
+      expectedSalary: normalizedExpectedSalary,
     };
+
+    // Debug: log applicationData keys (avoid logging full files)
+    try {
+      console.log('Saving applicationData (keys):', Object.keys(applicationData));
+    } catch (e) {
+      console.warn('Could not log applicationData keys', e.message);
+    }
 
     // Save to DB
     let savedApp;
     try {
       savedApp = await Recruitment.create(applicationData);
     } catch (err) {
-      // If Mongoose validation error, return 400 with field errors
-      if (err && err.name === 'ValidationError') {
+      // If Mongoose validation error, return 400 with field errors and log helpful debug info
+      if (err && err.name === "ValidationError") {
         const errors = Object.keys(err.errors).reduce((acc, key) => {
           acc[key] = err.errors[key].message;
           return acc;
         }, {});
+        console.warn('Validation failed for applicationData:', errors);
+        // Also log the problematic values for easier debugging (non-sensitive)
+        try {
+          const dbg = {};
+          Object.keys(errors).forEach((k) => {
+            dbg[k] = applicationData[k];
+          });
+          console.warn('Problematic values:', dbg);
+        } catch (e) {
+          console.warn('Failed to collect problematic values', e.message);
+        }
         return res.status(400).json({ message: 'Validation error', errors });
       }
       throw err;
