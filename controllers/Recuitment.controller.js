@@ -13,7 +13,7 @@ exports.createApplication = async (req, res) => {
     const photoFile = req.files?.photo?.[0] || null;
     const resumeFile = req.files?.resume?.[0] || null;
 
-    // Upload files to Cloudinary
+    // Upload files to Cloudinary (if provided)
     const photoLink = photoFile
       ? await uploadToCloudinary(photoFile.path, "photos")
       : null;
@@ -21,93 +21,218 @@ exports.createApplication = async (req, res) => {
       ? await uploadToCloudinary(resumeFile.path, "resumes")
       : null;
 
-    // Safe JSON parser
+    // Clean up local temp files if they exist
+    const tryUnlink = (p) => {
+      try {
+        if (p && typeof p === 'string' && fs.existsSync(p)) {
+          fs.unlinkSync(p);
+        }
+      } catch (e) {
+        console.warn('Unable to remove temp file', p, e.message);
+      }
+    };
+    tryUnlink(photoFile?.path);
+    tryUnlink(resumeFile?.path);
+
+    // Improved safe parser: handle already-parsed objects or JSON strings
     const parseJSON = (field, fallback = []) => {
       try {
-        return JSON.parse(field || JSON.stringify(fallback));
-      } catch {
+        if (field === undefined || field === null || field === "") return fallback;
+        if (typeof field === "string") return JSON.parse(field);
+        return field;
+      } catch (e) {
+        // If it's a comma-separated string, return array
+        if (typeof field === "string" && field.includes(",")) {
+          return field.split(",").map((s) => s.trim()).filter(Boolean);
+        }
         return fallback;
       }
     };
 
+    // Normalize references: support both `contact` and `contactNumber` from frontend
+    const rawReferences = parseJSON(req.body.references, []);
+    const references = Array.isArray(rawReferences)
+      ? rawReferences.map((r) => ({
+          name: r?.name || r?.fullName || "",
+          designation: r?.designation || r?.title || "",
+          contact: r?.contact || r?.contactNumber || r?.phone || "",
+        }))
+      : [];
+
+    // Social media may be stringified or object
+    const socialMedia = (() => {
+      const sm = parseJSON(req.body.socialMedia, {});
+      if (typeof sm === "string") return { linkedin: sm };
+      return sm || {};
+    })();
+
+    // Languages
+    let languagesKnown = parseJSON(req.body.languagesKnown, []);
+    if (!Array.isArray(languagesKnown) && typeof languagesKnown === "string") {
+      languagesKnown = languagesKnown.split(",").map((s) => s.trim()).filter(Boolean);
+    }
+
+    // Education qualifications and work experience
+    const educationQualifications = parseJSON(req.body.educationQualifications, []);
+    const workExperience = parseJSON(req.body.workExperience, []);
+
+    // Education category
+    let educationCategory = {};
+    try {
+      educationCategory = parseJSON(req.body.educationCategory, {});
+    } catch (e) {
+      educationCategory = {};
+    }
+
+    // Normalize enums using schema enum values (fuzzy matching)
+    const allowedDetails = Recruitment.schema.path('educationCategory.details')?.enumValues || [];
+    const allowedExpected = Recruitment.schema.path('expectedSalary')?.enumValues || [];
+
+    const sanitize = (s) => (String(s || '').toLowerCase().replace(/[^a-z0-9]+/g, ''));
+
+    const fuzzyFind = (input, candidates) => {
+      if (!input) return null;
+      const inS = sanitize(input);
+      // exact match first
+      const exact = candidates.find((c) => String(c) === String(input));
+      if (exact) return exact;
+      // sanitized exact
+      const sMatch = candidates.find((c) => sanitize(c) === inS);
+      if (sMatch) return sMatch;
+      // inclusion matches
+      const includeMatch = candidates.find((c) => sanitize(c).includes(inS) || inS.includes(sanitize(c)));
+      if (includeMatch) return includeMatch;
+      // partial token match
+      const tokens = inS.split(/\s+/).filter(Boolean);
+      for (const t of tokens) {
+        const tk = candidates.find((c) => sanitize(c).includes(t));
+        if (tk) return tk;
+      }
+      return null;
+    };
+
+    // Try to normalize incoming educationCategory.details to one of the allowed enum values
+    if (educationCategory && educationCategory.details) {
+      const normalized = fuzzyFind(educationCategory.details, allowedDetails);
+      if (normalized) educationCategory.details = normalized;
+      else if (allowedDetails.includes('Other')) educationCategory.details = 'Other';
+    }
+
+    // Normalize expectedSalary if possible (frontend sometimes sends school-range values)
+    if (req.body.expectedSalary) {
+      const normExp = fuzzyFind(req.body.expectedSalary, allowedExpected);
+      if (normExp) {
+        // Overwrite later when building applicationData
+      }
+    }
+
+  // Coerce numeric/boolean values
+  const physicalDisability = (req.body.physicalDisability === true) || (String(req.body.physicalDisability).toLowerCase() === "true") || (req.body.physicalDisability === "on");
+  const children = req.body.children ? parseInt(req.body.children, 10) || 0 : 0;
+  const totalWorkExperience = req.body.totalWorkExperience ? parseFloat(req.body.totalWorkExperience) || 0 : 0;
+
     // Construct application data
     const applicationData = {
-      // Cloudinary links
       photoLink,
       resumeLink,
 
-      // Job Info
       applyingFor: req.body.applyingFor,
       subjectOrDepartment: req.body.subjectOrDepartment,
 
-      // Personal Info
       fullName: req.body.fullName,
       fatherName: req.body.fatherName,
       fatherOccupation: req.body.fatherOccupation,
       motherName: req.body.motherName,
       motherOccupation: req.body.motherOccupation,
-      dateOfBirth: req.body.dateOfBirth,
+      dateOfBirth: req.body.dateOfBirth ? new Date(req.body.dateOfBirth) : undefined,
       gender: req.body.gender,
       bloodGroup: req.body.bloodGroup,
       category: req.body.category,
       religion: req.body.religion,
       nationality: req.body.nationality,
-      languagesKnown: parseJSON(req.body.languagesKnown, []),
+      languagesKnown,
 
-      physicalDisability: req.body.physicalDisability === "true",
+      physicalDisability,
       maritalStatus: req.body.maritalStatus,
       spouseName: req.body.spouseName,
-      children: req.body.children || 0,
+      children,
 
-      // Address
       address: req.body.address,
       addressPincode: req.body.addressPincode,
       permanentAddress: req.body.permanentAddress,
       permanentAddressPincode: req.body.permanentAddressPincode,
 
-      // Contact Info
       mobileNumber: req.body.mobileNumber,
       emergencyMobileNumber: req.body.emergencyMobileNumber,
       email: req.body.email,
 
-      // Interests
       areaOfInterest: req.body.areaOfInterest,
 
-      // Education
-      educationQualifications: parseJSON(
-        req.body.educationQualifications,
-        []
-      ),
-      educationCategory: (() => {
-        try {
-          return JSON.parse(req.body.educationCategory || "{}");
-        } catch {
-          return {};
+  educationQualifications,
+  // ensure educationCategory is an object and normalized
+  educationCategory: educationCategory || {},
+
+      totalWorkExperience,
+      // cast workExperience dates to Date objects when possible
+      workExperience: Array.isArray(workExperience)
+        ? workExperience.map((w) => ({
+            ...w,
+            startDate: w?.startDate ? new Date(w.startDate) : undefined,
+            endDate: w?.endDate ? new Date(w.endDate) : undefined,
+            netMonthlySalary: w?.netMonthlySalary ? Number(w.netMonthlySalary) : w?.netMonthlySalary,
+          }))
+        : workExperience,
+
+      socialMedia,
+
+      references,
+
+      // normalize expected salary to allowed enum when possible
+      expectedSalary: (() => {
+        const raw = req.body.expectedSalary;
+        if (!raw) return undefined;
+        const mapped = fuzzyFind(raw, allowedExpected);
+        if (mapped) return mapped;
+        // mapping common school ranges to nearest LPA buckets
+        const numeric = String(raw).match(/\d+/g)?.map(Number) || [];
+        if (numeric.length) {
+          const avg = numeric.reduce((a,b) => a+b,0)/numeric.length;
+          if (avg <= 300000) return 'Up to 3 LPA';
+          if (avg <= 700000) return '4 - 7 LPA';
+          if (avg <= 1100000) return '8 - 11 LPA';
+          if (avg <= 1500000) return '12 - 15 LPA';
+          if (avg <= 2000000) return '16 - 20 LPA';
+          if (avg <= 2500000) return '21 - 25 LPA';
+          return '25 LPA Above';
         }
+        // fallback: if not mappable, return as-is and let mongoose validate
+        return raw;
       })(),
+      
+      workExperience,
 
-      // Work Experience
-      totalWorkExperience: req.body.totalWorkExperience || 0,
-      workExperience: parseJSON(req.body.workExperience, []),
+      socialMedia,
 
-      // Social Media
-      socialMedia: (() => {
-        try {
-          return JSON.parse(req.body.socialMedia || "{}");
-        } catch {
-          return {};
-        }
-      })(),
+      references,
 
-      // References
-      references: parseJSON(req.body.references, []),
-
-      // Salary Expectation
       expectedSalary: req.body.expectedSalary,
     };
 
     // Save to DB
-    const savedApp = await Recruitment.create(applicationData);
+    let savedApp;
+    try {
+      savedApp = await Recruitment.create(applicationData);
+    } catch (err) {
+      // If Mongoose validation error, return 400 with field errors
+      if (err && err.name === 'ValidationError') {
+        const errors = Object.keys(err.errors).reduce((acc, key) => {
+          acc[key] = err.errors[key].message;
+          return acc;
+        }, {});
+        return res.status(400).json({ message: 'Validation error', errors });
+      }
+      throw err;
+    }
 
     // ------------------ 📧 HR Email ------------------
     const hrMessage = `

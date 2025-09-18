@@ -70,11 +70,6 @@
 
       // 📘 Advanced Education Category Selection
       educationCategory: {
-        category: {
-          type: String,
-          enum: ["Tier 1", "Tier 2", "Tier 3", "Tier 4", "Other"],
-          required: true,
-        },
         categoryRemark: { type: String }, // only when category = "Other"
 
         collegeType: {
