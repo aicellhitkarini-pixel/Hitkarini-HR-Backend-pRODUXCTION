@@ -130,6 +130,10 @@ exports.createApplication = async (req, res) => {
   const physicalDisability = (req.body.physicalDisability === true) || (String(req.body.physicalDisability).toLowerCase() === "true") || (req.body.physicalDisability === "on");
   const children = req.body.children ? parseInt(req.body.children, 10) || 0 : 0;
   const totalWorkExperience = req.body.totalWorkExperience ? parseFloat(req.body.totalWorkExperience) || 0 : 0;
+  const disabilityPercentage = (req.body.disabilityPercentage !== undefined && req.body.disabilityPercentage !== "")
+    ? Math.max(0, Math.min(100, Number(req.body.disabilityPercentage) || 0))
+    : undefined;
+  const experienceType = req.body.experienceType || "";
 
     // Prepare normalized workExperience (dates, numbers)
     const normalizedWorkExperience = Array.isArray(workExperience)
@@ -163,6 +167,7 @@ exports.createApplication = async (req, res) => {
 
     // Construct application data (cleaned, no duplicate keys)
     const applicationData = {
+      applicationType: req.body.applicationType,
       photoLink,
       resumeLink,
 
@@ -180,9 +185,12 @@ exports.createApplication = async (req, res) => {
       category: req.body.category,
       religion: req.body.religion,
       nationality: req.body.nationality,
+      region: req.body.region,
+      countryName: req.body.countryName,
       languagesKnown,
 
       physicalDisability,
+      disabilityPercentage,
       maritalStatus: req.body.maritalStatus,
       spouseName: req.body.spouseName,
       children,
@@ -197,10 +205,9 @@ exports.createApplication = async (req, res) => {
       email: req.body.email,
 
       areaOfInterest: req.body.areaOfInterest,
+      experienceType,
 
       educationQualifications,
-      educationCategory: educationCategory || {},
-
       totalWorkExperience,
       workExperience: normalizedWorkExperience,
 
@@ -209,6 +216,16 @@ exports.createApplication = async (req, res) => {
 
       expectedSalary: normalizedExpectedSalary,
     };
+
+    // Include educationCategory only for college applications with required fields
+    if (
+      String(req.body.applicationType || "").toLowerCase() === "college" &&
+      educationCategory &&
+      educationCategory.collegeType &&
+      educationCategory.details
+    ) {
+      applicationData.educationCategory = educationCategory;
+    }
 
     // Debug: log applicationData keys (avoid logging full files)
     try {
@@ -244,43 +261,57 @@ exports.createApplication = async (req, res) => {
       throw err;
     }
 
-    // ------------------ 📧 HR Email ------------------
-    const hrMessage = `
-      <h2>New Job Application Received</h2>
-      <p><b>Name:</b> ${savedApp.fullName}</p>
-      <p><b>Email:</b> ${savedApp.email}</p>
-      <p><b>Mobile:</b> ${savedApp.mobileNumber || "-"}</p>
-      <p><b>Position Applied:</b> ${savedApp.applyingFor || "-"}</p>
-      <p><b>Resume:</b> <a href="${savedApp.resumeLink}" target="_blank">View Resume</a></p>
-      <p><b>Photo:</b> <a href="${savedApp.photoLink}" target="_blank">View Photo</a></p>
-    `;
+    // ------------------ 📧 Emails (best-effort) ------------------
+    let emailStatus = { hr: "skipped", candidate: "skipped" };
 
-    await sendHrEmail({
-      to: "hitkarinisabhahr@gmail.com",
-      subject: `📩 New Application - ${savedApp.fullName}`,
-      message: hrMessage,
-    });
+    try {
+      const hrMessage = `
+        <h2>New Job Application Received</h2>
+        <p><b>Name:</b> ${savedApp.fullName}</p>
+        <p><b>Email:</b> ${savedApp.email}</p>
+        <p><b>Mobile:</b> ${savedApp.mobileNumber || "-"}</p>
+        <p><b>Position Applied:</b> ${savedApp.applyingFor || "-"}</p>
+        <p><b>Resume:</b> <a href="${savedApp.resumeLink}" target="_blank">View Resume</a></p>
+        <p><b>Photo:</b> <a href="${savedApp.photoLink}" target="_blank">View Photo</a></p>
+      `;
+      await sendHrEmail({
+        to: "hitkarinisabhahr@gmail.com",
+        subject: `📩 New Application - ${savedApp.fullName}`,
+        message: hrMessage,
+      });
+      emailStatus.hr = "sent";
+    } catch (e) {
+      console.error("⚠️ Failed to send HR email:", e?.message || e);
+      emailStatus.hr = "failed";
+    }
 
-    // ------------------ 📧 Candidate Email ------------------
-    const candidateMessage = `
-      <h2>Dear ${savedApp.fullName},</h2>
-      <p>Thank you for applying for the position of <b>${savedApp.applyingFor || "N/A"}</b> at Hitkarini Sabha.</p>
-      <p>We have successfully received your application. Our HR team will review your details and get back to you shortly.</p>
-      <br/>
-      <p>Best regards,</p>
-      <p><b>HR Team</b></p>
-    `;
+    try {
+      const candidateMessage = `
+        <h2>Dear ${savedApp.fullName},</h2>
+        <p>Thank you for applying for the position of <b>${savedApp.applyingFor || "N/A"}</b> at Hitkarini Sabha.</p>
+        <p>We have successfully received your application. Our HR team will review your details and get back to you shortly.</p>
+        <br/>
+        <p>Best regards,</p>
+        <p><b>HR Team</b></p>
+      `;
+      if (savedApp.email) {
+        await sendHrEmail({
+          to: savedApp.email,
+          subject: "✅ Your Application Has Been Received",
+          message: candidateMessage,
+        });
+        emailStatus.candidate = "sent";
+      }
+    } catch (e) {
+      console.error("⚠️ Failed to send Candidate email:", e?.message || e);
+      emailStatus.candidate = "failed";
+    }
 
-    await sendHrEmail({
-      to: savedApp.email,
-      subject: "✅ Your Application Has Been Received",
-      message: candidateMessage,
-    });
+    console.log("📧 Email status:", emailStatus);
 
-    console.log("✅ Emails sent: HR + Candidate");
-
-    res.status(201).json({
-      message: "Application submitted successfully and emails sent",
+    res.status(200).json({
+      message: "Application submitted successfully",
+      emailStatus,
       data: savedApp,
     });
   } catch (error) {

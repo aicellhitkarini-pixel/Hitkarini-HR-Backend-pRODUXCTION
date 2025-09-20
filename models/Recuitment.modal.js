@@ -5,6 +5,9 @@
       photoLink: { type: String },
       resumeLink: { type: String },
 
+      // Frontend flag to distinguish School vs College flows
+      applicationType: { type: String, enum: ["school", "college"] },
+
       applyingFor: {
         type: String,
         enum: ["Teaching", "Non Teaching", "Admin"],
@@ -25,12 +28,16 @@
       category: { type: String, enum: ["General", "OBC", "SC", "ST"] },
       religion: { type: String },
       nationality: { type: String },
+      // For Indians we capture region/state; for foreigners we may capture countryName
+      region: { type: String },
+      countryName: { type: String },
       languagesKnown: [{ type: String }],
 
       physicalDisability: { type: Boolean, default: false },
+      disabilityPercentage: { type: Number, min: 0, max: 100 },
       maritalStatus: {
         type: String,
-        enum: ["Married", "Unmarried"],
+        enum: ["Married", "Unmarried", "Divorced", "Widow", "Widower"],
         default: "Unmarried",
       },
       spouseName: { type: String },
@@ -46,6 +53,9 @@
       email: { type: String },
 
       areaOfInterest: { type: String },
+
+      // Frontend experience type selector
+      experienceType: { type: String, enum: ["fresher", "experienced", ""], default: "" },
 
       // 📘 Education Qualifications (10th, 12th, Graduation...)
       educationQualifications: [
@@ -70,6 +80,8 @@
 
       // 📘 Advanced Education Category Selection
       educationCategory: {
+        // Tier selection visible in frontend (optional)
+        category: { type: String, enum: ["Tier 1", "Tier 2", "Tier 3", "Tier 4"] },
         categoryRemark: { type: String }, // only when category = "Other"
 
         collegeType: {
@@ -87,7 +99,12 @@
             "Management",
             "Other",
           ],
-          required: true,
+          required: function() {
+            try {
+              const parentDoc = typeof this.parent === 'function' ? this.parent() : this;
+              return parentDoc && parentDoc.applicationType === "college";
+            } catch (e) { return false; }
+          },
         },
         collegeRemark: { type: String }, // only when collegeType = "Other"
 
@@ -145,7 +162,12 @@
 
             "Other",
           ],
-          required: true,
+          required: function() {
+            try {
+              const parentDoc = typeof this.parent === 'function' ? this.parent() : this;
+              return parentDoc && parentDoc.applicationType === "college";
+            } catch (e) { return false; }
+          },
         },
         detailsRemark: { type: String }, // only when details = "Other"
       },
