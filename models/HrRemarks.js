@@ -19,7 +19,7 @@ const hrRemarksSchema = new mongoose.Schema(
     },
     status: {
       type: String,
-      enum: ["Selected", "Rejected", "Pending"],
+      enum: ["Selected", "Rejected", "Pending" ,"Interview"],
       default: "Pending",
     },
     mailHistory: {

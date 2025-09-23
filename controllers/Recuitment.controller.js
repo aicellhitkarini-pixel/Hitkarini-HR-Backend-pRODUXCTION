@@ -6,7 +6,6 @@ const HrRemarks = require("../models/HrRemarks");
 const PDFDocument = require("pdfkit");
 const axios = require("axios");
 const path = require("path");
-const transporter = require("../middlewares/hrEmail");
 
 exports.createApplication = async (req, res) => {
   try {
@@ -21,18 +20,7 @@ exports.createApplication = async (req, res) => {
       ? await uploadToCloudinary(resumeFile.path, "resumes")
       : null;
 
-    // Clean up local temp files if they exist
-    const tryUnlink = (p) => {
-      try {
-        if (p && typeof p === 'string' && fs.existsSync(p)) {
-          fs.unlinkSync(p);
-        }
-      } catch (e) {
-        console.warn('Unable to remove temp file', p, e.message);
-      }
-    };
-    tryUnlink(photoFile?.path);
-    tryUnlink(resumeFile?.path);
+    // Note: Temporary files are deleted inside uploadToCloudinary on success/failure
 
     // Improved safe parser: handle already-parsed objects or JSON strings
     const parseJSON = (field, fallback = []) => {
@@ -326,7 +314,7 @@ exports.createApplication = async (req, res) => {
 
 exports.getApplications = async (req, res) => {
   try {
-    let { page = 1, limit = 10, applyingFor, gender, maritalStatus, areaOfInterest, minExperience, maxExperience } = req.query;
+    let { page = 1, limit = 10, applyingFor, gender, maritalStatus, areaOfInterest, subjectOrDepartment, minExperience, maxExperience, q } = req.query;
     page = parseInt(page);
     limit = parseInt(limit);
 
@@ -336,9 +324,47 @@ exports.getApplications = async (req, res) => {
     if (gender) filters.gender = gender;
     if (maritalStatus) filters.maritalStatus = maritalStatus;
     if (areaOfInterest) filters.areaOfInterest = { $regex: areaOfInterest, $options: "i" };
+    if (subjectOrDepartment) filters.subjectOrDepartment = { $regex: subjectOrDepartment, $options: "i" };
     if (minExperience || maxExperience) filters.totalWorkExperience = {};
     if (minExperience) filters.totalWorkExperience.$gte = parseFloat(minExperience);
     if (maxExperience) filters.totalWorkExperience.$lte = parseFloat(maxExperience);
+
+    // Global search across multiple fields
+    if (q && String(q).trim() !== "") {
+      const regex = new RegExp(String(q).trim(), "i");
+      filters.$or = [
+        { fullName: regex },
+        { email: regex },
+        { mobileNumber: regex },
+        { emergencyMobileNumber: regex },
+        { applyingFor: regex },
+        { subjectOrDepartment: regex },
+        { areaOfInterest: regex },
+        { gender: regex },
+        { maritalStatus: regex },
+        { address: regex },
+        { permanentAddress: regex },
+        { nationality: regex },
+        { region: regex },
+        { countryName: regex },
+        { expectedSalary: regex },
+        { "socialMedia.linkedin": regex },
+        { "socialMedia.facebook": regex },
+        { "socialMedia.instagram": regex },
+        // educationQualifications nested
+        { educationQualifications: { $elemMatch: { level: regex } } },
+        { educationQualifications: { $elemMatch: { subject: regex } } },
+        { educationQualifications: { $elemMatch: { institutionName: regex } } },
+        { educationQualifications: { $elemMatch: { boardOrUniversity: regex } } },
+        // workExperience nested
+        { workExperience: { $elemMatch: { designation: regex } } },
+        { workExperience: { $elemMatch: { institutionName: regex } } },
+        // references nested
+        { references: { $elemMatch: { name: regex } } },
+        { references: { $elemMatch: { designation: regex } } },
+        { references: { $elemMatch: { contact: regex } } },
+      ];
+    }
 
     const total = await Recruitment.countDocuments(filters);
     const data = await Recruitment.find(filters)
@@ -346,12 +372,47 @@ exports.getApplications = async (req, res) => {
       .skip((page - 1) * limit)
       .limit(limit);
 
+    // Build a map of applicationId -> latest status from HrRemarks.mailHistory
+    const appIds = data.map((d) => d._id);
+    const remarks = await HrRemarks.find({ applicationId: { $in: appIds } }).lean();
+
+    const latestStatusByApp = new Map();
+
+    const pickLatestStatus = (hrRemark) => {
+      if (!hrRemark) return null;
+      const buckets = ["Selected", "Rejected", "Interview"]; // priority decided by most recent date
+      let latest = { status: null, sentAt: null };
+      for (const bucket of buckets) {
+        const arr = Array.isArray(hrRemark.mailHistory?.[bucket]) ? hrRemark.mailHistory[bucket] : [];
+        for (const item of arr) {
+          const dt = item?.sentAt ? new Date(item.sentAt) : null;
+          if (dt && (!latest.sentAt || dt > latest.sentAt)) {
+            latest = { status: bucket, sentAt: dt };
+          }
+        }
+      }
+      // Fallback to stored status if no mailHistory
+      if (!latest.status && hrRemark.status) return hrRemark.status;
+      return latest.status;
+    };
+
+    for (const r of remarks) {
+      const appId = String(r.applicationId);
+      latestStatusByApp.set(appId, pickLatestStatus(r) || "Pending");
+    }
+
+    const dataWithStatus = data.map((doc) => {
+      const obj = doc.toObject ? doc.toObject() : doc;
+      const status = latestStatusByApp.get(String(doc._id)) || "Pending";
+      return { ...obj, status };
+    });
+
     res.status(200).json({
       page,
       limit,
       total,
       totalPages: Math.ceil(total / limit),
-      data,
+      data: dataWithStatus,
     });
   } catch (error) {
     console.error(error);
@@ -399,7 +460,14 @@ exports.getApplicationCounts = async (req, res) => {
 
 exports.sendEmail = async (req, res) => {
   try {
-    const { applicationId, to, subject, message, status } = req.body;
+    const { applicationId, to, subject, message } = req.body;
+    let { status } = req.body;
+
+    // Normalize status to allowed values (case-insensitive)
+    const allowedStatuses = ["Selected", "Rejected", "Interview"];
+    const norm = (s) => String(s || "").trim().toLowerCase();
+    const found = allowedStatuses.find((x) => norm(x) === norm(status));
+    const effectiveStatus = found || "Interview"; // default to Interview when unspecified/invalid
 
     // 1️⃣ Send email
     await sendHrEmail({ to, subject, message });
@@ -410,7 +478,7 @@ exports.sendEmail = async (req, res) => {
     if (!hrRemark) {
       hrRemark = new HrRemarks({
         applicationId,
-        status,
+        status: effectiveStatus,
         mailHistory: {
           Selected: [],
           Rejected: [],
@@ -420,17 +488,18 @@ exports.sendEmail = async (req, res) => {
     }
 
     // Push to mailHistory array based on status
-    hrRemark.mailHistory[status] = hrRemark.mailHistory[status] || [];
-    hrRemark.mailHistory[status].push({
+    hrRemark.mailHistory[effectiveStatus] = hrRemark.mailHistory[effectiveStatus] || [];
+    hrRemark.mailHistory[effectiveStatus].push({
       to,
       subject,
       body: message,
+      sentAt: new Date(),
     });
 
-    hrRemark.status = status; // update current status
+    hrRemark.status = effectiveStatus; // update current status
     await hrRemark.save();
 
-    res.status(200).json({ message: "Email sent and stored successfully", hrRemark });
+    res.status(200).json({ message: "Email sent and stored successfully", hrRemark, effectiveStatus });
   } catch (err) {
     console.error(err);
     res.status(500).json({ message: "Failed to send email", error: err.message });
@@ -440,6 +509,49 @@ exports.sendEmail = async (req, res) => {
 
 
 
+// Fetch a single application with derived status from HrRemarks
+exports.getApplicationWithStatus = async (req, res) => {
+  try {
+    const { id } = req.params;
+    if (!id) return res.status(400).json({ message: "Missing application ID" });
+
+    const application = await Recruitment.findById(id);
+    if (!application) return res.status(404).json({ message: "Application not found" });
+
+    // Find remarks for this application
+    const hrRemark = await HrRemarks.findOne({ applicationId: id }).lean();
+
+    // Derive latest status from mailHistory
+    const pickLatestStatus = (remark) => {
+      if (!remark) return null;
+      const buckets = ["Selected", "Rejected", "Interview"];
+      let latest = { status: null, sentAt: null };
+      for (const bucket of buckets) {
+        const arr = Array.isArray(remark.mailHistory?.[bucket]) ? remark.mailHistory[bucket] : [];
+        for (const item of arr) {
+          const dt = item?.sentAt ? new Date(item.sentAt) : null;
+          if (dt && (!latest.sentAt || dt > latest.sentAt)) {
+            latest = { status: bucket, sentAt: dt };
+          }
+        }
+      }
+      if (!latest.status && remark.status) return remark.status;
+      return latest.status;
+    };
+
+    const status = pickLatestStatus(hrRemark) || "Pending";
+    const data = application.toObject ? application.toObject() : application;
+
+    return res.status(200).json({
+      message: "Application fetched successfully",
+      data: { ...data, status },
+    });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ message: "Error fetching application", error: err.message });
+  }
+};
+
 
 exports.generateApplicationPDF = async (req, res) => {
   try {
@@ -448,6 +560,31 @@ exports.generateApplicationPDF = async (req, res) => {
 
     const application = await Recruitment.findById(id);
     if (!application) return res.status(404).json({ message: "Application not found" });
+
+    // Derive status for inclusion in the PDF
+    let derivedStatus = "Pending";
+    try {
+      const hrRemark = await HrRemarks.findOne({ applicationId: id }).lean();
+      const pickLatestStatus = (remark) => {
+        if (!remark) return null;
+        const buckets = ["Selected", "Rejected", "Interview"];
+        let latest = { status: null, sentAt: null };
+        for (const bucket of buckets) {
+          const arr = Array.isArray(remark.mailHistory?.[bucket]) ? remark.mailHistory[bucket] : [];
+          for (const item of arr) {
+            const dt = item?.sentAt ? new Date(item.sentAt) : null;
+            if (dt && (!latest.sentAt || dt > latest.sentAt)) {
+              latest = { status: bucket, sentAt: dt };
+            }
+          }
+        }
+        if (!latest.status && remark.status) return remark.status;
+        return latest.status;
+      };
+      derivedStatus = pickLatestStatus(hrRemark) || "Pending";
+    } catch (e) {
+      console.warn("Could not derive status for PDF:", e?.message || e);
+    }
 
     const doc = new PDFDocument({ size: "A4", margin: 50, bufferPages: true });
     res.setHeader("Content-Type", "application/pdf");
@@ -560,6 +697,7 @@ exports.generateApplicationPDF = async (req, res) => {
       [
         `Full Name: ${application.fullName || "-"}`,
         `Applying For: ${application.applyingFor || "-"}`,
+        `Status: ${derivedStatus || "-"}`,
         `Subject/Department: ${application.subjectOrDepartment || "-"}`,
         `Date of Birth: ${application.dateOfBirth ? new Date(application.dateOfBirth).toLocaleDateString('en-GB') : "-"}`,
         `Gender: ${application.gender || "-"}`,
