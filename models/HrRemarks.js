@@ -22,6 +22,13 @@ const hrRemarksSchema = new mongoose.Schema(
       enum: ["Selected", "Rejected", "Pending" ,"Interview"],
       default: "Pending",
     },
+    // Denormalized latest status for quick reads
+    latestStatus: {
+      type: String,
+      enum: ["Selected", "Rejected", "Pending", "Interview"],
+      default: "Pending",
+    },
+    latestStatusAt: { type: Date },
     mailHistory: {
       Selected: [mailHistorySchema],
       Rejected: [mailHistorySchema],

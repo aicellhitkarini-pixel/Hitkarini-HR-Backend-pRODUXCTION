@@ -314,12 +314,13 @@ exports.createApplication = async (req, res) => {
 
 exports.getApplications = async (req, res) => {
   try {
-    let { page = 1, limit = 10, applyingFor, gender, maritalStatus, areaOfInterest, subjectOrDepartment, minExperience, maxExperience, q } = req.query;
+    let { page = 1, limit = 10, applicationType, applyingFor, gender, maritalStatus, areaOfInterest, subjectOrDepartment, minExperience, maxExperience, q } = req.query;
     page = parseInt(page);
     limit = parseInt(limit);
 
     const filters = {};
 
+    if (applicationType) filters.applicationType = applicationType;
     if (applyingFor) filters.applyingFor = applyingFor;
     if (gender) filters.gender = gender;
     if (maritalStatus) filters.maritalStatus = maritalStatus;
@@ -377,9 +378,15 @@ exports.getApplications = async (req, res) => {
     const remarks = await HrRemarks.find({ applicationId: { $in: appIds } }).lean();
 
     const latestStatusByApp = new Map();
+    const latestSentAtByApp = new Map();
 
     const pickLatestStatus = (hrRemark) => {
       if (!hrRemark) return null;
+      // Prefer denormalized fields when available
+      if (hrRemark.latestStatus) {
+        const ts = hrRemark.latestStatusAt ? new Date(hrRemark.latestStatusAt) : null;
+        return { status: hrRemark.latestStatus, sentAt: ts };
+      }
       const buckets = ["Selected", "Rejected", "Interview"]; // priority decided by most recent date
       let latest = { status: null, sentAt: null };
       for (const bucket of buckets) {
@@ -392,19 +399,30 @@ exports.getApplications = async (req, res) => {
         }
       }
       // Fallback to stored status if no mailHistory
-      if (!latest.status && hrRemark.status) return hrRemark.status;
-      return latest.status;
+      if (!latest.status && hrRemark.status) {
+        return { status: hrRemark.status, sentAt: null };
+      }
+      return latest;
     };
 
     for (const r of remarks) {
       const appId = String(r.applicationId);
-      latestStatusByApp.set(appId, pickLatestStatus(r) || "Pending");
+      const latest = pickLatestStatus(r);
+      if (latest) {
+        latestStatusByApp.set(appId, latest.status || "Pending");
+        latestSentAtByApp.set(appId, latest.sentAt ? latest.sentAt.toISOString() : null);
+      } else {
+        latestStatusByApp.set(appId, "Pending");
+        latestSentAtByApp.set(appId, null);
+      }
     }
 
     const dataWithStatus = data.map((doc) => {
       const obj = doc.toObject ? doc.toObject() : doc;
-      const status = latestStatusByApp.get(String(doc._id)) || "Pending";
-      return { ...obj, status };
+      const id = String(doc._id);
+      const status = latestStatusByApp.get(id) || "Pending";
+      const statusUpdatedAt = latestSentAtByApp.get(id) || null;
+      return { ...obj, status, statusUpdatedAt };
     });
 
     res.status(200).json({
@@ -496,7 +514,11 @@ exports.sendEmail = async (req, res) => {
       sentAt: new Date(),
     });
 
+    const now = new Date();
     hrRemark.status = effectiveStatus; // update current status
+    // Also set denormalized latest fields for quick reads
+    hrRemark.latestStatus = effectiveStatus;
+    hrRemark.latestStatusAt = now;
     await hrRemark.save();
 
     res.status(200).json({ message: "Email sent and stored successfully", hrRemark, effectiveStatus });
@@ -535,16 +557,20 @@ exports.getApplicationWithStatus = async (req, res) => {
           }
         }
       }
-      if (!latest.status && remark.status) return remark.status;
-      return latest.status;
+      if (!latest.status && remark.status) {
+        return { status: remark.status, sentAt: null };
+      }
+      return latest;
     };
 
-    const status = pickLatestStatus(hrRemark) || "Pending";
+    const latest = pickLatestStatus(hrRemark);
+    const status = (latest && latest.status) || "Pending";
+    const statusUpdatedAt = latest && latest.sentAt ? latest.sentAt.toISOString() : null;
     const data = application.toObject ? application.toObject() : application;
 
     return res.status(200).json({
       message: "Application fetched successfully",
-      data: { ...data, status },
+      data: { ...data, status, statusUpdatedAt },
     });
   } catch (err) {
     console.error(err);
