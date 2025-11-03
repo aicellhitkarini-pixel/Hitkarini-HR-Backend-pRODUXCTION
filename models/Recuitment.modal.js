@@ -6,7 +6,7 @@
       resumeLink: { type: String },
 
       // Frontend flag to distinguish School vs College flows
-      applicationType: { type: String, enum: ["school", "college"] },
+      applicationType: { type: String, enum: ["school", "college", "others/administration"] },
 
       applyingFor: {
         type: String,
