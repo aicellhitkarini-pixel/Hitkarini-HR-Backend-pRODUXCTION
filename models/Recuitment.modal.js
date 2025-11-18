@@ -183,6 +183,20 @@
           endDate: { type: Date },
           netMonthlySalary: { type: Number },
           reasonOfLeaving: { type: String },
+          expectedSalary: { 
+            type: String,
+            enum: [
+              "0-300000",
+              "300001-600000",
+              "600001-900000",
+              "900001-1200000",
+              "1200001-1500000",
+              "1500001-2000000",
+              "2000001-2500000",
+              "2500001-3000000",
+              "3000001+"
+            ]
+          },
         },
       ],
 
@@ -202,17 +216,19 @@
         },
       ],
 
-      // 📘 Expected Salary
+      // 📘 Expected Salary (kept for backward compatibility, will be removed in future)
       expectedSalary: {
         type: String,
         enum: [
-          "Up to 3 LPA",
-          "4 - 7 LPA",
-          "8 - 11 LPA",
-          "12 - 15 LPA",
-          "16 - 20 LPA",
-          "21 - 25 LPA",
-          "25 LPA Above",
+          "0-300000",
+          "300001-600000",
+          "600001-900000",
+          "900001-1200000",
+          "1200001-1500000",
+          "1500001-2000000",
+          "2000001-2500000",
+          "2500001-3000000",
+          "3000001+"
         ],
       },
     },
