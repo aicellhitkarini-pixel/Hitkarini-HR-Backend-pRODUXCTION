@@ -119,10 +119,257 @@ exports.createApplication = async (req, res) => {
 
     res.status(200).json({ message: "Application submitted successfully", data: savedApp });
   } catch (error) {
-    console.error("❌ Error while saving application:", error);
-    res.status(500).json({ message: "Error while saving application", error: error.message });
+    console.error("Error removing duplicates:", error);
+    res.status(500).json({ success: false, message: "Failed to remove duplicates" });
   }
 };
+
+// Excel Import Function (robust + detailed reporting)
+exports.uploadExcel = async (req, res) => {
+  const fs = require("fs");
+  try {
+    if (!req.file || !req.file.path) {
+      return res.status(400).json({ success: false, message: 'No file uploaded' });
+    }
+
+    const xlsx = require('xlsx');
+    const workbook = xlsx.readFile(req.file.path);
+    const worksheet = workbook.Sheets[workbook.SheetNames[0]];
+
+    // Read rows with default values to avoid undefined
+    let jsonData = xlsx.utils.sheet_to_json(worksheet, { defval: "" });
+
+    // Normalize keys: trim & lowercase
+    jsonData = jsonData.map(row => {
+      const normalized = {};
+      Object.keys(row).forEach(k => {
+        if (typeof k === "string") {
+          const nk = k.trim().replace(/\uFEFF/g, ""); // remove BOM if present
+          normalized[nk.toLowerCase()] = row[k];
+        } else {
+          normalized[String(k).toLowerCase()] = row[k];
+        }
+      });
+      return normalized;
+    });
+
+    // helper to try many possible header variants
+    const getField = (row, variants = []) => {
+      for (const v of variants) {
+        const key = v.toLowerCase().trim();
+        if (row.hasOwnProperty(key) && row[key] !== undefined && row[key] !== "") return row[key];
+      }
+      // also attempt exact numeric/parenthesized variants present in sheet
+      for (const k of Object.keys(row)) {
+        for (const v of variants) {
+          if (k.includes(v.toLowerCase().trim())) return row[k];
+        }
+      }
+      return "";
+    };
+
+    // header variants for common columns in your sheet
+    const NAME_VARIANTS = ['(4) applicant full name', 'applicant full name', 'full name', 'name', 'applicant name'];
+    const EMAIL_VARIANTS = ['(11) email id', 'email id', 'email address', 'email'];
+    const MOBILE_VARIANTS = ['(12) mobile number', 'mobile number', 'mobile', 'phone', 'contact', 'contact number'];
+    const DOB_VARIANTS = ['(6) date of birth', 'date of birth', 'dob', 'birthdate'];
+    const ADDR_VARIANTS = ['(13) address', 'address', '(20) address with pin code', 'address with pin code'];
+    const PIN_VARIANTS = ['(14) pincode', 'pincode', 'zip', 'zip code'];
+    const HIGHEST_QUAL_VARIANTS = ['(10) graduation with specialization subject', '(15) highest qualification', 'highest qualification', 'qualification'];
+    const INSTITUTION_VARIANTS = ['(17) name of institution', 'name of institution', 'institution'];
+    const YOP_VARIANTS = ['(16) year of passing', 'year of passing', 'yop', 'passing year'];
+    const APPLY_FOR_VARIANTS = ['(1) apply for', 'apply for'];
+    const CATEGORY_VARIANTS = ['(2) category of appointment', 'category of appointment'];
+
+    // simple email regex
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+    const accepted = [];
+    const rejected = [];
+    const seen = new Set(); // to dedupe within uploaded file
+
+    // helper: convert Excel serial or string to Date
+    const parseExcelDate = (value) => {
+      if (!value && value !== 0) return null;
+      if (typeof value === "number") {
+        const jsDate = new Date((value - 25569) * 86400 * 1000);
+        return isNaN(jsDate.getTime()) ? null : jsDate;
+      }
+      const jsDate = new Date(value);
+      return isNaN(jsDate.getTime()) ? null : jsDate;
+    };
+
+    // helper: map qualification string to schema enum
+    const mapQualificationLevel = (qualification) => {
+      if (!qualification) return null;
+      const q = String(qualification).toLowerCase();
+      if (q.includes('phd') || q.includes('doctor')) return 'PhD';
+      if (q.includes('m.') || q.includes('master') || q.includes('pg')) return 'Post Graduation';
+      if (q.includes('b.') || q.includes('bsc') || q.includes('ba') || q.includes('b.com') || q.includes('b.ed') || q.includes('graduation')) return 'Graduation';
+      if (q.includes('12') || q.includes('xii') || q.includes('higher secondary')) return '12th';
+      if (q.includes('10') || q.includes('x ')) return '10th';
+      return 'Graduation';
+    };
+
+    jsonData.forEach((rawRow, idx) => {
+      // read raw values using variants
+      const rawName = getField(rawRow, NAME_VARIANTS);
+      const rawEmail = getField(rawRow, EMAIL_VARIANTS);
+      const rawMobile = getField(rawRow, MOBILE_VARIANTS);
+      const rawDob = getField(rawRow, DOB_VARIANTS);
+      const rawAddress = getField(rawRow, ADDR_VARIANTS);
+      const rawPin = getField(rawRow, PIN_VARIANTS);
+      const rawQual = getField(rawRow, HIGHEST_QUAL_VARIANTS);
+      const rawInst = getField(rawRow, INSTITUTION_VARIANTS);
+      const rawYop = getField(rawRow, YOP_VARIANTS);
+      const rawApplyFor = getField(rawRow, APPLY_FOR_VARIANTS);
+      const rawCategory = getField(rawRow, CATEGORY_VARIANTS);
+
+      // normalize strings
+      const fullName = String(rawName || "").trim() || null;
+      const email = String(rawEmail || "").trim() || "";
+      // mobile may be numeric in Excel -> coerce to string and remove .0 if any
+      let mobile = rawMobile === null || rawMobile === undefined ? "" : String(rawMobile).trim();
+      // Excel sometimes returns floats like "9876543210.0"
+      if (mobile.endsWith(".0")) mobile = mobile.replace(/\.0+$/, "");
+      mobile = mobile.replace(/\s+/g, "");
+
+      // reasons array for rejection tracing
+      const reasons = [];
+      if (!fullName) reasons.push("missing name");
+      if (!email) reasons.push("missing email");
+      else if (!emailRegex.test(email)) reasons.push("invalid email");
+      const dobDate = parseExcelDate(rawDob);
+      if (!mobile) reasons.push("missing mobile");
+      if (!dobDate) reasons.push("missing dob");
+
+      // dedupe key
+      const dedupeKey = `${(email || "").toLowerCase()}|${mobile || ""}`;
+      if (seen.has(dedupeKey)) reasons.push("duplicate in uploaded file");
+
+      if (reasons.length > 0) {
+        rejected.push({ row: idx + 2, // +2 approx: header + 1
+                         raw: rawRow,
+                         reasons });
+        return;
+      }
+
+      // mark seen
+      seen.add(dedupeKey);
+
+      // map applicationType from "apply for" column
+      let applicationType = "college";
+      const applyForLc = String(rawApplyFor || "").toLowerCase();
+      if (applyForLc.includes("school")) applicationType = "school";
+      else if (applyForLc.includes("college")) applicationType = "college";
+      else if (applyForLc) applicationType = "others/administration";
+
+      // map applyingFor (Teaching / Non Teaching / Admin)
+      let applyingFor = null;
+      const catLc = String(rawCategory || "").toLowerCase();
+      if (catLc.includes("non") && catLc.includes("teach")) applyingFor = "Non Teaching";
+      else if (catLc.includes("teach")) applyingFor = "Teaching";
+      else if (catLc.includes("admin")) applyingFor = "Admin";
+
+      // build application object similar to your schema
+      const application = {
+        fullName,
+        applyingFor,
+        gender: getField(rawRow, ['(7) gender', 'gender']) || null,
+        dateOfBirth: dobDate,
+        maritalStatus: getField(rawRow, ['(8) marital status', 'marital status']) || null,
+        nationality: getField(rawRow, ['(10) nationality', 'nationality']) || null,
+        religion: getField(rawRow, ['religion']) || "",
+        email,
+        mobileNumber: mobile,
+        address: rawAddress || null,
+        addressPincode: rawPin || null,
+        applicationType,
+        educationQualifications: [],
+        workExperience: [{
+          institutionName: getField(rawRow, ['(19) employer name', 'employer name', 'employer']) || "",
+          designation: getField(rawRow, ['(20) designation', 'designation', 'role']) || "",
+          startDate: parseExcelDate(getField(rawRow, ['(21) start date', 'start date'])),
+          endDate: parseExcelDate(getField(rawRow, ['(22) end date', 'end date']))
+        }]
+      };
+
+      const qualLevel = mapQualificationLevel(rawQual);
+      if (qualLevel) {
+        application.educationQualifications.push({
+          level: qualLevel,
+          institutionName: rawInst || "",
+          yearOfPassing: rawYop ? (Number(rawYop) || rawYop) : ""
+        });
+      }
+
+      accepted.push({ row: idx + 2, application });
+    });
+
+    if (accepted.length === 0) {
+      // remove uploaded file
+      try { fs.unlinkSync(req.file.path); } catch (e) {}
+      return res.status(400).json({
+        success: false,
+        message: "No valid applications found in the file",
+        totalRows: jsonData.length,
+        rejectedCount: rejected.length,
+        rejectedSample: rejected.slice(0, 10)
+      });
+    }
+
+    // prepare documents to insert and remove duplicates again (safe)
+    const docsToInsert = [];
+    const insertSeen = new Set();
+    accepted.forEach(a => {
+      const key = `${a.application.email.toLowerCase()}|${a.application.mobileNumber}`;
+      if (!insertSeen.has(key)) {
+        insertSeen.add(key);
+        docsToInsert.push(a.application);
+      }
+    });
+
+    // Insert to DB
+    let insertResult;
+    try {
+      insertResult = await Recruitment.insertMany(docsToInsert, { ordered: false });
+    } catch (err) {
+      // some drivers return error with result property, some throw BulkWriteError
+      if (err && err.result && err.result.insertedCount !== undefined) {
+        insertResult = err.result;
+      } else if (Array.isArray(err.insertedDocs)) {
+        insertResult = err.insertedDocs;
+      } else {
+        // fallback: try to compute length from what was inserted if available
+        insertResult = [];
+      }
+    }
+
+    const insertedCount = Array.isArray(insertResult) ? insertResult.length : (insertResult.insertedCount || 0);
+
+    // remove uploaded file
+    try { fs.unlinkSync(req.file.path); } catch (e) {}
+
+    return res.status(201).json({
+      success: true,
+      message: "Excel processed",
+      totalRows: jsonData.length,
+      accepted: docsToInsert.length,
+      insertedCount,
+      rejectedCount: rejected.length,
+      rejectedSample: rejected.slice(0, 10),
+      acceptedSample: docsToInsert.slice(0, 10)
+    });
+
+  } catch (err) {
+    // cleanup file on server error
+    try { if (req.file && req.file.path) fs.unlinkSync(req.file.path); } catch (e) {}
+    console.error("Error processing Excel:", err);
+    return res.status(500).json({ success: false, message: "Error processing file", error: err.message || String(err) });
+  }
+};
+
+
 
 exports.getApplications = async (req, res) => {
   try {
